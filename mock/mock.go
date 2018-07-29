@@ -7,25 +7,28 @@ import (
 	"github.com/vbogretsov/go-mail"
 )
 
-// Sender represent mock for mailcd.Sender.
+type mailbox struct {
+	mutex sync.Mutex
+	items *list.List
+}
+
+// Sender represent mock for mail.Sender.
 type Sender struct {
-	mutex   sync.Mutex
-	inboxes map[string]*list.List
-	Error   error
+	mutex sync.RWMutex
+	boxes map[string]*mailbox
+	Error error
 }
 
 // New creates new sender mock.
 func New() *Sender {
 	return &Sender{
-		mutex:   sync.Mutex{},
-		inboxes: map[string]*list.List{},
-		Error:   nil,
+		boxes: map[string]*mailbox{},
+		Error: nil,
 	}
 }
 
-// Send implements mailcd.Sender.Send.
-func (s *Sender) Send(req mailcd.Request) error {
-	s.mutex.Lock()
+// Send implements mail.Sender.Send.
+func (s *Sender) Send(req mail.Request) error {
 	for _, addr := range req.To {
 		s.send(req, addr.Email)
 	}
@@ -35,36 +38,50 @@ func (s *Sender) Send(req mailcd.Request) error {
 	for _, addr := range req.Bcc {
 		s.send(req, addr.Email)
 	}
-	s.mutex.Unlock()
 	return s.Error
 }
 
-// Close implements mailcd.Sender.Close.
+// Close implements mail.Sender.Close.
 func (s *Sender) Close() error {
 	return nil
 }
 
-func (s *Sender) ReadMail(email string) (mailcd.Request, bool) {
-	var req mailcd.Request
+func (s *Sender) ReadMail(email string) (mail.Request, bool) {
+	var req mail.Request
 	var ok bool
-	s.mutex.Lock()
-	inbox, ok := s.inboxes[email]
-	ok = ok && inbox.Len() > 0
+
+	s.mutex.RLock()
+	box, ok := s.boxes[email]
+	s.mutex.RUnlock()
+
 	if ok {
-		node := inbox.Front()
-		inbox.Remove(node)
-		req = node.Value.(mailcd.Request)
+		box.mutex.Lock()
+		if box.items.Len() > 0 {
+			node := box.items.Front()
+			box.items.Remove(node)
+			req = node.Value.(mail.Request)
+		} else {
+			ok = false
+		}
+		box.mutex.Unlock()
 	}
-	s.mutex.Unlock()
+
 	return req, ok
 }
 
-func (s *Sender) send(req mailcd.Request, recipient string) {
-	if inbox, ok := s.inboxes[recipient]; ok {
-		inbox.PushBack(req)
-	} else {
-		inbox := list.New()
-		inbox.PushBack(req)
-		s.inboxes[recipient] = inbox
+func (s *Sender) send(req mail.Request, recipient string) {
+	s.mutex.RLock()
+	box, ok := s.boxes[recipient]
+	s.mutex.RUnlock()
+
+	if !ok {
+		box = &mailbox{items: list.New()}
+		s.mutex.Lock()
+		s.boxes[recipient] = box
+		s.mutex.Unlock()
 	}
+
+	box.mutex.Lock()
+	box.items.PushBack(req)
+	box.mutex.Unlock()
 }

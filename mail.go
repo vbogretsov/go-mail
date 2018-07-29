@@ -1,4 +1,4 @@
-package mailcd
+package mail
 
 import (
 	"encoding/json"
